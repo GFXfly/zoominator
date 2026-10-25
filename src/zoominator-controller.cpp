@@ -61,6 +61,18 @@ static constexpr long X11_None = 0L;
 
 static int qtKeyToVk(int qtKey);
 
+static Qt::KeyboardModifiers physicalModifiers(Qt::KeyboardModifiers mods)
+{
+#ifdef __APPLE__
+	// Qt uses Control for Command and Meta for Control on macOS.
+	const bool command = mods.testFlag(Qt::ControlModifier);
+	const bool control = mods.testFlag(Qt::MetaModifier);
+	mods.setFlag(Qt::ControlModifier, control);
+	mods.setFlag(Qt::MetaModifier, command);
+#endif
+	return mods;
+}
+
 static constexpr const char *kZoominatorMarkerSourceName = "Zoominator Cursor Marker";
 static constexpr const char *kZoominatorMarkerSourceId = "zoominator_marker_source";
 static void cleanup_legacy_marker_items_all_scenes(obs_source_t *currentMarkerSource = nullptr);
@@ -702,7 +714,7 @@ void ZoominatorController::loadSettings()
 	QKeySequence followSeq(followToggleHotkeySequence);
 	if (!followSeq.isEmpty()) {
 		const QKeyCombination kc = followSeq[0];
-		const auto mods = kc.keyboardModifiers();
+		const auto mods = physicalModifiers(kc.keyboardModifiers());
 		const int key = int(kc.key());
 		followToggleHotkeyVk = qtKeyToVk(key);
 		followToggleModCtrl = mods.testFlag(Qt::ControlModifier);
@@ -3814,11 +3826,11 @@ static int qtKeyToVk(int qtKey)
 	case Qt::Key_Shift:
 		return kVK_Shift;
 	case Qt::Key_Control:
-		return kVK_Control;
+		return kVK_Command;
 	case Qt::Key_Alt:
 		return kVK_Option;
 	case Qt::Key_Meta:
-		return kVK_Command;
+		return kVK_Control;
 	case Qt::Key_Semicolon:
 		return kVK_ANSI_Semicolon;
 	case Qt::Key_Equal:
@@ -4027,7 +4039,7 @@ void ZoominatorController::rebuildTriggersFromSettings()
 	QKeySequence followSeq(followToggleHotkeySequence);
 	if (!followSeq.isEmpty()) {
 		const QKeyCombination kc = followSeq[0];
-		const auto mods = kc.keyboardModifiers();
+		const auto mods = physicalModifiers(kc.keyboardModifiers());
 		const int key = int(kc.key());
 		followToggleHotkeyVk = qtKeyToVk(key);
 		followToggleModCtrl = mods.testFlag(Qt::ControlModifier);
@@ -4111,7 +4123,7 @@ void ZoominatorController::rebuildTriggersFromSettings()
 				     hkValid ? 1 : 0);
 		} else {
 			const QKeyCombination kc = seq[0];
-			const auto mods = kc.keyboardModifiers();
+			const auto mods = physicalModifiers(kc.keyboardModifiers());
 			const int key = int(kc.key());
 			hotkeyVk = qtKeyToVk(key);
 
