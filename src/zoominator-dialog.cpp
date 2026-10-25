@@ -34,6 +34,7 @@ void signal_handler_disconnect(struct signal_handler *handler, const char *signa
 #include <QScrollArea>
 #include <QSet>
 #include <QSpinBox>
+#include <QStyleFactory>
 #include <QTabWidget>
 #include <QVBoxLayout>
 #include <QString>
@@ -504,6 +505,13 @@ void ZoominatorDialog::buildUi()
 		lay->addWidget(info);
 
 		lstSources = new QListWidget(page);
+#ifdef __APPLE__
+		// QTBUG-150017: native item-view check indicators are invisible on macOS 27.
+		if (auto *style = QStyleFactory::create(QStringLiteral("Fusion"))) {
+			style->setParent(lstSources);
+			lstSources->setStyle(style);
+		}
+#endif
 		lstSources->setAlternatingRowColors(true);
 		lstSources->setSortingEnabled(false);
 		lay->addWidget(lstSources, 1);
