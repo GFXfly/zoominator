@@ -44,6 +44,14 @@ void signal_handler_disconnect(struct signal_handler *handler, const char *signa
 
 #include <algorithm>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#endif
+
 namespace {
 
 static QString T(const char *key)
@@ -62,6 +70,35 @@ static QWidget *mkField(const QString &labelText, QWidget *input)
 	v->addWidget(input);
 	return container;
 }
+
+#ifdef _WIN32
+/* Qt 6.11 reports monitors by their EDID friendly name ("MNT (1)"), whose
+ * numbering follows neither Windows' display numbers nor the physical layout.
+ * The Windows device name is what users see in Display Settings, so show it. */
+static QString windowsDeviceNameForOrigin(const QPoint &origin)
+{
+	struct Ctx {
+		QPoint want;
+		QString found;
+	};
+	Ctx ctx{origin, {}};
+	EnumDisplayMonitors(
+		nullptr, nullptr,
+		[](HMONITOR mon, HDC, LPRECT, LPARAM lp) -> BOOL {
+			auto *c = reinterpret_cast<Ctx *>(lp);
+			MONITORINFOEXW mi{};
+			mi.cbSize = sizeof(mi);
+			if (!GetMonitorInfoW(mon, &mi))
+				return TRUE;
+			if (QPoint(mi.rcMonitor.left, mi.rcMonitor.top) != c->want)
+				return TRUE;
+			c->found = QString::fromWCharArray(mi.szDevice);
+			return FALSE;
+		},
+		reinterpret_cast<LPARAM>(&ctx));
+	return ctx.found;
+}
+#endif
 
 static QScrollArea *wrapScrollable(QWidget *page)
 {
@@ -740,20 +777,57 @@ void ZoominatorDialog::populateSources()
 	cmbSource->clear();
 	cmbSource->addItem(T("Dialog.SelectScreen"), "");
 
-	const auto screens = QGuiApplication::screens();
-	for (int i = 0; i < screens.size(); ++i) {
-		auto *screen = screens[i];
-		if (!screen)
-			continue;
+	/* List screens in physical order (left to right, then top to bottom) and
+	 * say where each one is. Monitor names alone are ambiguous: identical
+	 * monitors get the same name, and the indices Qt appends do not match
+	 * Windows' display numbers, so a user can pick a neighbour by mistake. */
+	auto screens = QGuiApplication::screens();
+	screens.erase(std::remove(screens.begin(), screens.end(), nullptr), screens.end());
+	std::stable_sort(screens.begin(), screens.end(), [](const QScreen *a, const QScreen *b) {
+		const QRect ga = a->geometry();
+		const QRect gb = b->geometry();
+		return ga.x() != gb.x() ? ga.x() < gb.x() : ga.y() < gb.y();
+	});
+
+	const QScreen *primary = QGuiApplication::primaryScreen();
+	const QScreen *obsScreen = nullptr;
+	if (auto *mainWindow = reinterpret_cast<QWidget *>(obs_frontend_get_main_window()))
+		obsScreen = mainWindow->screen();
+
+	const int count = screens.size();
+	for (int i = 0; i < count; ++i) {
+		const QScreen *screen = screens[i];
 		const QRect g = screen->geometry();
 		const QString key = QStringLiteral("%1,%2,%3,%4").arg(g.x()).arg(g.y()).arg(g.width()).arg(g.height());
-		const QString label = QStringLiteral("%1: %2×%3 @ (%4, %5)")
-					      .arg(screen->name())
-					      .arg(g.width())
-					      .arg(g.height())
-					      .arg(g.x())
-					      .arg(g.y());
-		cmbSource->addItem(label, key);
+
+		QString place;
+		if (count <= 1)
+			place = T("Dialog.Screen.Only");
+		else if (i == 0)
+			place = T("Dialog.Screen.Left");
+		else if (i == count - 1)
+			place = T("Dialog.Screen.Right");
+		else if (count == 3)
+			place = T("Dialog.Screen.Center");
+		else
+			place = T("Dialog.Screen.FromLeft").arg(i + 1);
+
+		QStringList parts;
+		parts << QStringLiteral("%1 (%2/%3)").arg(place).arg(i + 1).arg(count);
+		parts << screen->name();
+#ifdef _WIN32
+		const QString device = windowsDeviceNameForOrigin(g.topLeft());
+		if (!device.isEmpty() && device != screen->name())
+			parts << device;
+#endif
+		parts << QStringLiteral("%1×%2 @ (%3, %4)").arg(g.width()).arg(g.height()).arg(g.x()).arg(g.y());
+		if (screen == primary)
+			parts << T("Dialog.Screen.Primary");
+		if (screen == obsScreen)
+			parts << T("Dialog.Screen.ObsWindow");
+
+		cmbSource->addItem(parts.join(QStringLiteral("  ·  ")), key);
+		cmbSource->setItemData(cmbSource->count() - 1, T("Dialog.TargetScreenTooltip"), Qt::ToolTipRole);
 	}
 
 	int idx = cmbSource->findData(cur);

@@ -222,6 +222,7 @@ private:
 	double tickDeltaSeconds = 1.0 / 60.0;
 	qint64 lastTickMs = 0;
 	qint64 lastTransformApplyMs = 0;
+	qint64 lastDiagLogMs = 0;
 	float lastFollowAnchorX = 0.0f;
 	float lastFollowAnchorY = 0.0f;
 	bool lastFollowAnchorValid = false;

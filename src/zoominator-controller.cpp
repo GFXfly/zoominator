@@ -63,6 +63,7 @@ static constexpr long X11_None = 0L;
 #endif
 
 static int qtKeyToVk(int qtKey);
+static QString make_screen_key_from_rect(int x, int y, int w, int h);
 
 static Qt::KeyboardModifiers physicalModifiers(Qt::KeyboardModifiers mods)
 {
@@ -596,6 +597,21 @@ void ZoominatorController::initialize()
 {
 	loadSettings();
 	rebuildTriggersFromSettings();
+	if (debug) {
+		const auto screens = QGuiApplication::screens();
+		for (int i = 0; i < screens.size(); ++i) {
+			const QScreen *s = screens[i];
+			if (!s)
+				continue;
+			const QRect g = s->geometry();
+			blog(LOG_INFO, "[Zoominator] screen %d: '%s' %dx%d @ (%d,%d) dpr=%.2f%s", i,
+			     s->name().toUtf8().constData(), g.width(), g.height(), g.x(), g.y(), s->devicePixelRatio(),
+			     (make_screen_key_from_rect(g.x(), g.y(), g.width(), g.height()) == screenKey)
+				     ? "  <- selected"
+				     : "");
+		}
+		blog(LOG_INFO, "[Zoominator] selected screen key: '%s'", screenKey.toUtf8().constData());
+	}
 	obs_frontend_add_event_callback(frontendEventCallback, this);
 	obs_add_tick_callback(videoTickCallback, this);
 	tickCallbackAdded = true;
@@ -2455,6 +2471,25 @@ void ZoominatorController::captureOriginalSceneItems(const std::vector<obs_scene
 	if (recoveryActive && !sceneItems.empty())
 		saveSettings();
 
+	if (debug) {
+		for (const auto &state : sceneItems) {
+			obs_source_t *src = state.item ? obs_sceneitem_get_source(state.item) : nullptr;
+			const float sw = src ? (float)obs_source_get_width(src) : 0.0f;
+			const float sh = src ? (float)obs_source_get_height(src) : 0.0f;
+			const float visibleW =
+				std::max(1.0f, sw - (float)state.orig.crop.left - (float)state.orig.crop.right);
+			const float visibleH =
+				std::max(1.0f, sh - (float)state.orig.crop.top - (float)state.orig.crop.bottom);
+			blog(LOG_INFO,
+			     "[Zoominator] item '%s' (%s) visible=%d src=%.0fx%.0f rendered=%.0fx%.0f at (%.0f,%.0f) scale=(%.3f,%.3f) bounds=%d align=%u",
+			     src ? obs_source_get_name(src) : "?", src ? obs_source_get_id(src) : "?",
+			     state.item ? (int)obs_sceneitem_visible(state.item) : 0, sw, sh,
+			     visibleW * state.orig.effectiveScale.x, visibleH * state.orig.effectiveScale.y,
+			     state.orig.effectivePos.x, state.orig.effectivePos.y, state.orig.effectiveScale.x,
+			     state.orig.effectiveScale.y, (int)state.orig.boundsType, state.orig.align);
+		}
+	}
+
 	for (const auto &state : sceneItems) {
 		if (!state.item || !state.orig.valid)
 			continue;
@@ -2923,6 +2958,24 @@ void ZoominatorController::onTick()
 	float sx = 0.0f, sy = 0.0f;
 	bool insideNow = false;
 	const bool mappedNow = getCursorPos(cx, cy) && mapCursorToScenePixels(cx, cy, sx, sy, insideNow);
+
+	if (debug) {
+		const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+		if (nowMs - lastDiagLogMs >= 1000) {
+			lastDiagLogMs = nowMs;
+			int rx = 0, ry = 0, rw = 0, rh = 0;
+			const bool haveRect = getSelectedScreenRect(rx, ry, rw, rh);
+			obs_video_info ovi{};
+			const bool haveVi = obs_get_video_info(&ovi);
+			blog(LOG_INFO,
+			     "[Zoominator] diag: cursor=(%d,%d) rect=%s(%d,%d %dx%d) mapped=%d inside=%d canvasPt=(%.1f,%.1f) canvas=%ux%u bounds=%s(%.0f,%.0f)-(%.0f,%.0f) centerUntilEdge=%d overflow=%d%% zoom=%.2f items=%zu",
+			     cx, cy, haveRect ? "" : "NONE", rx, ry, rw, rh, (int)mappedNow, (int)insideNow, sx, sy,
+			     haveVi ? ovi.base_width : 0u, haveVi ? ovi.base_height : 0u,
+			     sceneContentBoundsValid ? "" : "canvas", sceneContentMin.x, sceneContentMin.y,
+			     sceneContentMax.x, sceneContentMax.y, (int)centerCursorUntilEdge, edgeOverflowMarginPct,
+			     zoomFactor, sceneItems.size());
+		}
+	}
 
 	obs_source_t *previousRef = nullptr;
 	{
