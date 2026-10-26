@@ -58,6 +58,16 @@ endfunction()
 
 check_sdk_requirements()
 
+# Xcode 26 exports several *_DEPLOYMENT_TARGET variables (iOS, tvOS, watchOS, visionOS, DriverKit) into the
+# environment of script build phases. CMake's AUTOMOC "predefines" step runs the bare compiler there without a
+# target version, and clang then aborts with "conflicting deployment targets". Passing the macOS deployment
+# target explicitly makes clang ignore those variables.
+foreach(lang IN ITEMS C CXX OBJC OBJCXX)
+  if(DEFINED CMAKE_${lang}_COMPILER_PREDEFINES_COMMAND)
+    list(APPEND CMAKE_${lang}_COMPILER_PREDEFINES_COMMAND "-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+  endif()
+endforeach()
+
 # Enable dSYM generator for release builds
 string(APPEND CMAKE_C_FLAGS_RELEASE " -g")
 string(APPEND CMAKE_CXX_FLAGS_RELEASE " -g")
