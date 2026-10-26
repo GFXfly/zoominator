@@ -20,6 +20,7 @@ void signal_handler_disconnect(struct signal_handler *handler, const char *signa
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QEvent>
 #include <QFrame>
 #include <QGridLayout>
 #include <QGuiApplication>
@@ -29,13 +30,15 @@ void signal_handler_disconnect(struct signal_handler *handler, const char *signa
 #include <QListWidget>
 #include <QMap>
 #include <QMetaObject>
+#include <QPalette>
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
 #include <QSet>
 #include <QSpinBox>
 #include <QStyleFactory>
-#include <QTabWidget>
+#include <QStackedWidget>
+#include <QTabBar>
 #include <QVBoxLayout>
 #include <QString>
 
@@ -181,9 +184,40 @@ void ZoominatorDialog::buildUi()
 {
 	auto *root = new QVBoxLayout(this);
 	root->setContentsMargins(12, 12, 12, 12);
-	root->setSpacing(8);
+	root->setSpacing(0);
 
-	tabWidget = new QTabWidget(this);
+	/* One bordered panel laid out like an OBS dock: a header strip holding the
+	 * tabs, the page content on the base colour, and a footer strip with the
+	 * status line and the action buttons. The three parts share one outline. */
+	auto *panel = new QFrame(this);
+	panel->setObjectName(QStringLiteral("zoominatorPanel"));
+	auto *panelLay = new QVBoxLayout(panel);
+	panelLay->setContentsMargins(0, 0, 0, 0);
+	panelLay->setSpacing(0);
+
+	panelHeader = new QFrame(panel);
+	panelHeader->setObjectName(QStringLiteral("zoominatorPanelHeader"));
+	{
+		auto *h = new QHBoxLayout(panelHeader);
+		h->setContentsMargins(8, 6, 8, 0);
+		h->setSpacing(0);
+		tabBar = new QTabBar(panelHeader);
+		tabBar->setExpanding(false);
+		tabBar->setDrawBase(false);
+		tabBar->setUsesScrollButtons(false);
+		h->addWidget(tabBar, 0, Qt::AlignBottom);
+		h->addStretch(1);
+	}
+	panelLay->addWidget(panelHeader);
+
+	pages = new QStackedWidget(panel);
+	pages->setObjectName(QStringLiteral("zoominatorPanelContent"));
+	panelLay->addWidget(pages, 1);
+
+	auto addPage = [this](QWidget *page, const QString &title) {
+		pages->addWidget(page);
+		tabBar->addTab(title);
+	};
 
 	{
 		auto *page = new QWidget;
@@ -224,7 +258,7 @@ void ZoominatorDialog::buildUi()
 		supportLabel->setWordWrap(true);
 		lay->addWidget(supportLabel);
 
-		tabWidget->addTab(wrapScrollable(page), T("Dialog.Tab.Target"));
+		addPage(wrapScrollable(page), T("Dialog.Tab.Target"));
 	}
 
 	{
@@ -313,7 +347,7 @@ void ZoominatorDialog::buildUi()
 		lay->addWidget(rowModifiersWidget);
 
 		lay->addStretch(1);
-		tabWidget->addTab(wrapScrollable(page), T("Dialog.Tab.Trigger"));
+		addPage(wrapScrollable(page), T("Dialog.Tab.Trigger"));
 
 		connect(cmbTrigger, &QComboBox::currentIndexChanged, this, [this](int) {
 			const bool isMouse = (cmbTrigger->currentData().toString() == "mouse");
@@ -491,7 +525,7 @@ void ZoominatorDialog::buildUi()
 		lay->addWidget(chkDebug);
 
 		lay->addStretch(1);
-		tabWidget->addTab(wrapScrollable(page), T("Dialog.Tab.Advanced"));
+		addPage(wrapScrollable(page), T("Dialog.Tab.Advanced"));
 	}
 
 	{
@@ -514,28 +548,41 @@ void ZoominatorDialog::buildUi()
 #endif
 		lstSources->setAlternatingRowColors(true);
 		lstSources->setSortingEnabled(false);
+		lstSources->setFrameShape(QFrame::NoFrame);
 		lay->addWidget(lstSources, 1);
 
-		tabWidget->addTab(page, T("Dialog.Tab.Sources"));
+		addPage(page, T("Dialog.Tab.Sources"));
 	}
 
-	root->addWidget(tabWidget, 1);
+	connect(tabBar, &QTabBar::currentChanged, pages, &QStackedWidget::setCurrentIndex);
 
-	lblStatus = new QLabel(this);
-	lblStatus->setWordWrap(true);
-	lblStatus->setText(T("Dialog.StatusTip"));
-	root->addWidget(lblStatus);
+	panelFooter = new QFrame(panel);
+	panelFooter->setObjectName(QStringLiteral("zoominatorPanelFooter"));
+	{
+		auto *f = new QHBoxLayout(panelFooter);
+		f->setContentsMargins(10, 8, 10, 8);
+		f->setSpacing(8);
 
-	auto *btnRow = new QHBoxLayout;
-	btnRow->setSpacing(8);
-	btnRefresh = new QPushButton(T("Dialog.RefreshLists"), this);
-	btnApply = new QPushButton(T("Dialog.Apply"), this);
-	btnTest = new QPushButton(T("Dialog.Test"), this);
-	btnRow->addWidget(btnRefresh);
-	btnRow->addStretch(1);
-	btnRow->addWidget(btnTest);
-	btnRow->addWidget(btnApply);
-	root->addLayout(btnRow);
+		lblStatus = new QLabel(panelFooter);
+		lblStatus->setObjectName(QStringLiteral("zoominatorStatus"));
+		lblStatus->setWordWrap(true);
+		lblStatus->setText(T("Dialog.StatusTip"));
+		lblStatus->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+
+		btnRefresh = new QPushButton(T("Dialog.RefreshLists"), panelFooter);
+		btnTest = new QPushButton(T("Dialog.Test"), panelFooter);
+		btnApply = new QPushButton(T("Dialog.Apply"), panelFooter);
+		btnApply->setDefault(true);
+
+		f->addWidget(lblStatus, 1);
+		f->addWidget(btnRefresh);
+		f->addWidget(btnTest);
+		f->addWidget(btnApply);
+	}
+	panelLay->addWidget(panelFooter);
+
+	root->addWidget(panel, 1);
+	applyPanelStyle();
 
 	connect(btnRefresh, &QPushButton::clicked, this, &ZoominatorDialog::refreshLists);
 	connect(btnApply, &QPushButton::clicked, this, &ZoominatorDialog::applyToController);
@@ -544,6 +591,58 @@ void ZoominatorDialog::buildUi()
 	connect(btnClearFollowToggleHotkey, &QPushButton::clicked, this, &ZoominatorDialog::clearFollowToggleHotkey);
 	connect(btnMarkerColor, &QPushButton::clicked, this, &ZoominatorDialog::chooseMarkerColor);
 	connect(chkShowCursorMarker, &QCheckBox::toggled, chkShowMarkerWhenNotZoomed, &QWidget::setEnabled);
+}
+
+/* Colours come from the live palette so the panel follows whichever OBS theme
+ * is active: the content sits on palette(base); the header and footer strips
+ * and the outline are the base colour nudged towards the text colour, which is
+ * what the Yami dock title (grey5 on grey6, grey4 border) amounts to. */
+void ZoominatorDialog::applyPanelStyle()
+{
+	/* setStyleSheet() itself raises StyleChange/PaletteChange on this widget,
+	 * which lands in changeEvent() below. Without this guard the two call
+	 * each other until the stack overflows (crash on opening the dialog). */
+	if (applyingPanelStyle)
+		return;
+	applyingPanelStyle = true;
+
+	const QPalette pal = palette();
+	const QColor base = pal.color(QPalette::Base);
+	const bool dark = base.lightnessF() < 0.5;
+	const QColor strip = dark ? base.lighter(128) : base.darker(106);
+	const QColor border = dark ? base.lighter(155) : base.darker(122);
+	QColor muted = pal.color(QPalette::Text);
+	muted.setAlphaF(0.65f);
+
+	const QString qss =
+		QStringLiteral(
+			"#zoominatorPanelHeader {"
+			"  background: %1; border: 1px solid %2;"
+			"  border-top-left-radius: 4px; border-top-right-radius: 4px; }"
+			"#zoominatorPanelHeader QTabBar { background: transparent; }"
+			"#zoominatorPanelContent {"
+			"  background: palette(base); border: 1px solid %2; border-top: none; border-bottom: none; }"
+			"#zoominatorPanelContent QScrollArea,"
+			"#zoominatorPanelContent QScrollArea > QWidget > QWidget,"
+			"#zoominatorPanelContent QListWidget { background: transparent; border: none; }"
+			"#zoominatorPanelFooter {"
+			"  background: %1; border: 1px solid %2;"
+			"  border-bottom-left-radius: 4px; border-bottom-right-radius: 4px; }"
+			"#zoominatorStatus { background: transparent; color: %3; }")
+			.arg(strip.name(QColor::HexRgb), border.name(QColor::HexRgb), muted.name(QColor::HexArgb));
+	if (qss != styleSheet())
+		setStyleSheet(qss);
+
+	applyingPanelStyle = false;
+}
+
+void ZoominatorDialog::changeEvent(QEvent *event)
+{
+	QDialog::changeEvent(event);
+	/* Only a palette change (OBS theme switch) needs new colours. StyleChange
+	 * is deliberately ignored: our own setStyleSheet() emits it. */
+	if (event && event->type() == QEvent::PaletteChange)
+		applyPanelStyle();
 }
 
 void ZoominatorDialog::populateSourcesTab()

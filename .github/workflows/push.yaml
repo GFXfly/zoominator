@@ -10,30 +10,37 @@ on:
       - '*'
 permissions:
   contents: write
+  actions: read
 jobs:
   check-format:
     name: Check Formatting 🔍
-    if: github.ref_name == 'master' || github.ref_name == 'main'
+    if: github.ref_type == 'branch' && (github.ref_name == 'master' || github.ref_name == 'main')
     uses: ./.github/workflows/check-format.yaml
     permissions:
       contents: read
 
-  build-project:
-    name: Build Project 🧱
-    uses: ./.github/workflows/build-project.yaml
-    secrets: inherit
-    permissions:
-      contents: read
-
-  create-release:
-    name: Create Release 🛫
+  # Tag pushes do not rebuild. They look for a successful manual "Build" run of
+  # the tagged commit and reuse its artifacts. Only when no such run exists is
+  # the plugin built here as a fallback.
+  find-build:
+    name: Find Existing Build 🔎
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
-    needs: build-project
     defaults:
       run:
         shell: bash
+    outputs:
+      validTag: ${{ steps.check.outputs.validTag }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+      version: ${{ steps.check.outputs.version }}
+      pluginName: ${{ steps.check.outputs.pluginName }}
+      commitSha: ${{ steps.check.outputs.commitSha }}
+      runId: ${{ steps.find.outputs.runId }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Check Release Tag ☑️
         id: check
         run: |
@@ -52,24 +59,102 @@ jobs:
               echo 'prerelease=true' >> $GITHUB_OUTPUT
               echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
               ;;
-            *) echo 'validTag=false' >> $GITHUB_OUTPUT ;;
+            *)
+              echo 'validTag=false' >> $GITHUB_OUTPUT
+              echo "::notice::Tag '${GITHUB_REF_NAME}' is not a release version, skipping release."
+              exit 0
+              ;;
           esac
 
-      - name: Download Build Artifacts 📥
-        uses: actions/download-artifact@v4
-        if: fromJSON(steps.check.outputs.validTag)
-        id: download
+          # Annotated tags: resolve to the commit the tag points at.
+          commit_sha="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
+          echo "commitSha=${commit_sha}" >> $GITHUB_OUTPUT
 
-      - name: Rename Files 🏷️
+          plugin_name="$(jq -r '.displayName // .name' buildspec.json)"
+          echo "pluginName=${plugin_name}" >> $GITHUB_OUTPUT
+
+          spec_version="$(jq -r '.version' buildspec.json)"
+          if [[ "${spec_version}" != "${GITHUB_REF_NAME}" ]]; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' does not match buildspec.json version '${spec_version}'. Bump buildspec.json, build, then tag that commit."
+            exit 1
+          fi
+
+      - name: Find Build Run For Commit 🔎
+        id: find
         if: fromJSON(steps.check.outputs.validTag)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_SHA: ${{ steps.check.outputs.commitSha }}
         run: |
-          : Rename Files 🏷️
+          : Find Build Run For Commit 🔎
+          if [[ "${RUNNER_DEBUG}" ]]; then set -x; fi
+
+          run_id="$(gh run list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --workflow build.yaml \
+            --commit "${COMMIT_SHA}" \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty')"
+
+          if [[ "${run_id}" ]]; then
+            echo "runId=${run_id}" >> $GITHUB_OUTPUT
+            echo "::notice::Reusing artifacts from Build run ${run_id} for commit ${COMMIT_SHA:0:9}."
+            echo "Reusing artifacts from [Build run ${run_id}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}) for commit \`${COMMIT_SHA:0:9}\`." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "runId=" >> $GITHUB_OUTPUT
+            echo "::warning::No successful Build run found for commit ${COMMIT_SHA:0:9}; building now."
+            echo "No successful Build run found for commit \`${COMMIT_SHA:0:9}\`, building in this run." >> $GITHUB_STEP_SUMMARY
+          fi
+
+  build-project:
+    name: Build Project (fallback) 🧱
+    needs: find-build
+    if: github.ref_type == 'tag' && fromJSON(needs.find-build.outputs.validTag) && needs.find-build.outputs.runId == ''
+    uses: ./.github/workflows/build-project.yaml
+    secrets: inherit
+    permissions:
+      contents: read
+    with:
+      config: Release
+      package: 'true'
+      codesign: 'true'
+      notarize: 'true'
+
+  create-release:
+    name: Create Release 🛫
+    # !cancelled() lets this run when the fallback build was skipped (artifacts
+    # reused); the explicit result checks keep it from running after a failure.
+    if: github.ref_type == 'tag' && !cancelled() && needs.find-build.result == 'success' && fromJSON(needs.find-build.outputs.validTag) && needs.build-project.result != 'failure'
+    runs-on: ubuntu-24.04
+    needs: [find-build, build-project]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Download Artifacts From Build Run 📥
+        if: needs.find-build.outputs.runId != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          : Download Artifacts From Build Run 📥
+          if [[ "${RUNNER_DEBUG}" ]]; then set -x; fi
+          gh run download ${{ needs.find-build.outputs.runId }} --repo "${GITHUB_REPOSITORY}" --dir "${GITHUB_WORKSPACE}"
+          ls -la "${GITHUB_WORKSPACE}"
+
+      - name: Download Artifacts From This Run 📥
+        if: needs.find-build.outputs.runId == ''
+        uses: actions/download-artifact@v4
+
+      - name: Collect Files 🏷️
+        run: |
+          : Collect Files 🏷️
           if [[ "${RUNNER_DEBUG}" ]]; then set -x; fi
           shopt -s extglob
           shopt -s nullglob
 
           root_dir="$(pwd)"
-          commit_hash="${GITHUB_SHA:0:9}"
 
           variants=(
             'windows-x64;zip|exe'
@@ -81,15 +166,21 @@ jobs:
           for variant_data in "${variants[@]}"; do
             IFS=';' read -r variant suffix <<< "${variant_data}"
 
-            candidates=(*-${variant}-${commit_hash}/@(*|*-dbgsym).@(${suffix}))
+            candidates=(*-${variant}-*/@(*|*-dbgsym).@(${suffix}))
 
             for candidate in "${candidates[@]}"; do
               mv "${candidate}" "${root_dir}"
             done
           done
 
+          files=(@(*.exe|*.deb|*.ddeb|*.pkg|*.tar.xz|*.zip))
+          if (( ${#files[@]} == 0 )); then
+            echo "::error::No release packages found in the downloaded artifacts."
+            exit 1
+          fi
+          printf 'Release file: %s\n' "${files[@]}"
+
       - name: Generate Checksums 🪪
-        if: fromJSON(steps.check.outputs.validTag)
         run: |
           : Generate Checksums 🪪
           if [[ "${RUNNER_DEBUG}" ]]; then set -x; fi
@@ -99,17 +190,34 @@ jobs:
           for file in ${{ github.workspace }}/@(*.exe|*.deb|*.ddeb|*.pkg|*.tar.xz|*.zip); do
             echo "    ${file##*/}: $(sha256sum "${file}" | cut -d " " -f 1)" >> ${{ github.workspace }}/CHECKSUMS.txt
           done
+          cat ${{ github.workspace }}/CHECKSUMS.txt
+
+      - name: Check For Existing Release 🔎
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          : Check For Existing Release 🔎
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            echo 'exists=true' >> $GITHUB_OUTPUT
+            echo "Release ${GITHUB_REF_NAME} already exists; packages will be attached to it."
+          else
+            echo 'exists=false' >> $GITHUB_OUTPUT
+            echo "No release for ${GITHUB_REF_NAME} yet; a draft release will be created."
+          fi
 
       - name: Create Release 🛫
-        if: fromJSON(steps.check.outputs.validTag)
         id: create_release
         uses: softprops/action-gh-release@9d7c94cfd0a1f3ed45544c887983e9fa900f0564
         with:
-          draft: true
-          prerelease: ${{ fromJSON(steps.check.outputs.prerelease) }}
-          tag_name: ${{ steps.check.outputs.version }}
-          name: ${{ needs.build-project.outputs.pluginName }} ${{ steps.check.outputs.version }}
+          # New releases start as drafts so notes can be written before publishing.
+          # An existing (published) release keeps its state and just gets the files.
+          draft: ${{ !fromJSON(steps.existing.outputs.exists) }}
+          prerelease: ${{ fromJSON(needs.find-build.outputs.prerelease) }}
+          tag_name: ${{ needs.find-build.outputs.version }}
+          name: ${{ needs.find-build.outputs.pluginName }} ${{ needs.find-build.outputs.version }}
           body_path: ${{ github.workspace }}/CHECKSUMS.txt
+          append_body: ${{ fromJSON(steps.existing.outputs.exists) }}
           files: |
             ${{ github.workspace }}/*.exe
             ${{ github.workspace }}/*.zip

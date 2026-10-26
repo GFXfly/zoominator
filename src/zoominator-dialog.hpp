@@ -11,7 +11,8 @@ class QLabel;
 class QListWidget;
 class QPushButton;
 class QSpinBox;
-class QTabWidget;
+class QStackedWidget;
+class QTabBar;
 struct calldata;
 
 class ZoominatorDialog final : public QDialog {
@@ -22,6 +23,7 @@ public:
 
 protected:
 	void closeEvent(QCloseEvent *event) override;
+	void changeEvent(QEvent *event) override;
 
 private slots:
 	void refreshLists();
@@ -34,13 +36,19 @@ private slots:
 
 private:
 	void buildUi();
+	void applyPanelStyle();
 	void loadFromController();
 	void populateSources();
 	void updateMarkerColorButton(const QColor &color);
 
 	static void obsSourceChanged(void *data, struct calldata *cd);
 
-	QTabWidget *tabWidget = nullptr;
+	/* Dock-style panel: header strip (tabs), content (pages), footer strip (status + buttons). */
+	QFrame *panelHeader = nullptr;
+	QTabBar *tabBar = nullptr;
+	QStackedWidget *pages = nullptr;
+	QFrame *panelFooter = nullptr;
+	bool applyingPanelStyle = false;
 
 	QComboBox *cmbSource = nullptr;
 	QComboBox *cmbMode = nullptr;

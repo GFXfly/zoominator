@@ -42,6 +42,10 @@ It operates at the **scene level**, meaning it works with any source automatical
 
 ## Installation
 
+> **Requirements:** Zoominator 2.1.0 and newer are built against **OBS Studio 33** and
+> need OBS 33.0 or later. On OBS 31 / 32 keep using
+> [Zoominator 2.0.6](https://github.com/mmlTools/zoominator/releases/tag/2.0.6).
+
 ### Windows
 
 1. Download the latest release.
@@ -70,25 +74,60 @@ It operates at the **scene level**, meaning it works with any source automatical
 
 ## Build from Source
 
+The build follows the official OBS plugin template: `buildspec.json` pins the OBS
+sources and the pre-built dependencies (currently OBS 33.0.0 and obs-deps
+2026-10-23), and CMake downloads and verifies them on first configure.
+
 ### Requirements
-- OBS Studio development libraries
-- CMake (3.20+ recommended)
-- C++17 compatible compiler
-- Qt6
+- CMake 3.28 or newer
+- **Windows:** Visual Studio 2026 with the Windows 11 SDK 10.0.26100
+- **macOS:** Xcode 26.5 or newer (macOS 13.0 deployment target, universal binary)
+- **Linux:** `libobs-dev`, Qt 6 development packages, X11 / Xrandr / XInput2 headers
 
 ### Steps
 ```bash
 git clone https://github.com/mmlTools/zoominator.git
 cd zoominator
-mkdir build && cd build
-cmake ..
-cmake --build . --config Release
+
+# Windows
+cmake --preset windows-x64
+cmake --build --preset windows-x64 --config RelWithDebInfo
+
+# macOS
+cmake --preset macos
+cmake --build --preset macos
+
+# Linux
+cmake --preset ubuntu-x86_64
+cmake --build --preset ubuntu-x86_64
 ```
 
----
+The built plugin and its `data/` folder land in `build_<arch>/rundir/<config>/`.
+Copy `zoominator.dll` to `<OBS>/obs-plugins/64bit/` and the `zoominator` data folder
+to `<OBS>/data/obs-plugins/` to test it locally.
+
+### Releasing (maintainers)
+
+CI never builds on a plain push; builds are started by hand and the tag reuses them.
+
+1. Bump `version` in `buildspec.json`, commit and push to `main`.
+2. In GitHub **Actions → Build → Run workflow**, pick `Release` and run it.
+   The run summary prints the exact `git tag` command for that commit.
+3. Tag the built commit with the same version and push the tag:
+   ```bash
+   git tag 2.1.0 <commit>
+   git push origin 2.1.0
+   ```
+4. The **Push** workflow finds the successful Build run for that commit, downloads
+   its artifacts and attaches them, with checksums, to the GitHub release
+   (created as a draft if it does not exist yet). Nothing is rebuilt. If no Build
+   run exists for the tagged commit, it builds once as a fallback.
+
+The tag must match the `buildspec.json` version; the workflow fails otherwise.
 
 ## Compatibility Notes
 
+- **OBS Studio:** 33.0 or newer (Zoominator 2.1.0+). Use 2.0.6 on OBS 31 / 32.
 - **Windows:** Full support (global input, smooth tracking, and Mouse X2 + wheel zoom)
 - **macOS:** Requires Accessibility permissions for input tracking
 - **Linux (X11):** Supported via XInput2

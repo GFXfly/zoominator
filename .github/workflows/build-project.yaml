@@ -1,10 +1,37 @@
 name: Build Project
 on:
   workflow_call:
+    inputs:
+      config:
+        description: Build configuration (overrides the event default when set)
+        required: false
+        type: string
+        default: ''
+      package:
+        description: Create installer packages (overrides the event default when set)
+        required: false
+        type: string
+        default: ''
+      codesign:
+        description: Codesign macOS build (overrides the event default when set)
+        required: false
+        type: string
+        default: ''
+      notarize:
+        description: Notarize macOS package (overrides the event default when set)
+        required: false
+        type: string
+        default: ''
     outputs:
       pluginName:
         description: Project name detected by parsing build spec file
         value: ${{ jobs.check-event.outputs.pluginName }}
+      pluginVersion:
+        description: Project version detected by parsing build spec file
+        value: ${{ jobs.check-event.outputs.pluginVersion }}
+      commitHash:
+        description: Short commit hash used in artifact names
+        value: ${{ jobs.check-event.outputs.commitHash }}
 jobs:
   check-event:
     name: Check GitHub Event Data 🔎
@@ -19,6 +46,7 @@ jobs:
       config: ${{ steps.setup.outputs.config }}
       commitHash: ${{ steps.setup.outputs.commitHash }}
       pluginName: ${{ steps.setup.outputs.pluginName }}
+      pluginVersion: ${{ steps.setup.outputs.pluginVersion }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,6 +55,10 @@ jobs:
         id: setup
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_CONFIG: ${{ inputs.config }}
+          INPUT_PACKAGE: ${{ inputs.package }}
+          INPUT_CODESIGN: ${{ inputs.codesign }}
+          INPUT_NOTARIZE: ${{ inputs.notarize }}
         run: |
           : Check Event Data ☑️
           if [[ "${RUNNER_DEBUG}" ]]; then set -x; fi
@@ -48,7 +80,7 @@ jobs:
               fi
               ;;
             workflow_dispatch)
-              config_data=('codesign:true' 'notarize:false' 'package:false' 'config:RelWithDebInfo')
+              config_data=('codesign:true' 'notarize:true' 'package:true' 'config:Release')
               ;;
             schedule)
               config_data=('codesign:true' 'notarize:false' 'package:true' 'config:RelWithDebInfo')
@@ -56,24 +88,44 @@ jobs:
             *) ;;
           esac
 
+          # Explicit inputs from the calling workflow win over the event defaults.
+          if [[ "${INPUT_CODESIGN}" ]]; then config_data[0]="codesign:${INPUT_CODESIGN}"; fi
+          if [[ "${INPUT_NOTARIZE}" ]]; then config_data[1]="notarize:${INPUT_NOTARIZE}"; fi
+          if [[ "${INPUT_PACKAGE}" ]]; then config_data[2]="package:${INPUT_PACKAGE}"; fi
+          if [[ "${INPUT_CONFIG}" ]]; then config_data[3]="config:${INPUT_CONFIG}"; fi
+
           for config in "${config_data[@]}"; do
             IFS=':' read -r key value <<< "${config}"
             echo "${key}=${value}" >> $GITHUB_OUTPUT
           done
           echo "commitHash=${GITHUB_SHA:0:9}" >> $GITHUB_OUTPUT
 
-          plugin_name="$(grep 'name' buildspec.json | sed -E -e 's/^.+"name":[^"]+"(.+)",?$/\1/g')"
-          plugin_display_name="$(grep 'displayName' buildspec.json | sed -E -e 's/^.+"displayName":[^"]+"(.+)",?$/\1/g' || echo "")"
+          plugin_name="$(jq -r '.name' buildspec.json)"
+          plugin_display_name="$(jq -r '.displayName // empty' buildspec.json)"
+          plugin_version="$(jq -r '.version' buildspec.json)"
 
           if [[ "${plugin_display_name}" ]]; then
             echo "pluginName=${plugin_display_name}" >> $GITHUB_OUTPUT
           else
             echo "pluginName=${plugin_name}" >> $GITHUB_OUTPUT
           fi
+          echo "pluginVersion=${plugin_version}" >> $GITHUB_OUTPUT
+
+          {
+            echo "### Build configuration"
+            echo "| Setting | Value |"
+            echo "| --- | --- |"
+            echo "| Version | ${plugin_version} |"
+            echo "| Commit | ${GITHUB_SHA:0:9} |"
+            for config in "${config_data[@]}"; do
+              IFS=':' read -r key value <<< "${config}"
+              echo "| ${key} | ${value} |"
+            done
+          } >> $GITHUB_STEP_SUMMARY
 
   macos-build:
     name: Build for macOS 🍏
-    runs-on: macos-15
+    runs-on: macos-26
     needs: check-event
     defaults:
       run:
@@ -90,8 +142,13 @@ jobs:
           : Set Up Environment 🔧
           if (( ${+RUNNER_DEBUG} )) setopt XTRACE
 
-          print '::group::Enable Xcode 16.1'
-          sudo xcode-select --switch /Applications/Xcode_16.1.0.app/Contents/Developer
+          print '::group::Select Xcode'
+          # OBS 33 requires Xcode 26.5 / macOS 26.5 SDK or newer. Prefer the exact
+          # version OBS builds with; otherwise keep the image default (newer).
+          if [[ -d /Applications/Xcode_26.5.app ]] {
+            sudo xcode-select --switch /Applications/Xcode_26.5.app/Contents/Developer
+          }
+          xcodebuild -version
           print '::endgroup::'
 
           print '::group::Clean Homebrew Environment'
@@ -269,7 +326,8 @@ jobs:
 
   windows-build:
     name: Build for Windows 🪟
-    runs-on: windows-2022
+    # OBS 33 builds with Visual Studio 2026 and the 10.0.26100 SDK; windows-2025 ships both.
+    runs-on: windows-2025
     needs: check-event
     defaults:
       run:

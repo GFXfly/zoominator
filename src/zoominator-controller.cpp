@@ -24,6 +24,9 @@
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <Windows.h>
 #include <Psapi.h>
 #endif
@@ -1282,6 +1285,9 @@ static std::vector<MonitorInfoLite> enum_monitors()
 #include <vector>
 #include <string>
 #include <cwctype>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <winuser.h>
 #include <wingdi.h>

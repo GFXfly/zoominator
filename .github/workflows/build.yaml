@@ -1,0 +1,61 @@
+name: Build
+run-name: Manual build of ${{ github.ref_name }} (${{ inputs.config }}) 🧱
+on:
+  workflow_dispatch:
+    inputs:
+      config:
+        description: Build configuration
+        required: true
+        type: choice
+        default: Release
+        options:
+          - Release
+          - RelWithDebInfo
+      package:
+        description: Create installer packages (.pkg / .deb) in addition to archives
+        required: false
+        type: boolean
+        default: true
+      notarize:
+        description: Notarize the macOS package (needs the Apple notarization secrets)
+        required: false
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: 'build @ ${{ github.ref }}'
+  cancel-in-progress: false
+jobs:
+  build-project:
+    name: Build Project 🧱
+    uses: ./.github/workflows/build-project.yaml
+    secrets: inherit
+    permissions:
+      contents: read
+    with:
+      config: ${{ inputs.config }}
+      package: ${{ inputs.package && 'true' || 'false' }}
+      codesign: 'true'
+      notarize: ${{ inputs.notarize && 'true' || 'false' }}
+
+  summary:
+    name: Summary 📋
+    runs-on: ubuntu-24.04
+    needs: build-project
+    steps:
+      - name: Write Summary
+        run: |
+          : Write Summary
+          {
+            echo "### ${{ needs.build-project.outputs.pluginName }} ${{ needs.build-project.outputs.pluginVersion }} built from \`${GITHUB_SHA}\`"
+            echo
+            echo "To release this exact build, tag this commit with the version from \`buildspec.json\`:"
+            echo
+            echo '```'
+            echo "git tag ${{ needs.build-project.outputs.pluginVersion }} ${GITHUB_SHA}"
+            echo "git push origin ${{ needs.build-project.outputs.pluginVersion }}"
+            echo '```'
+            echo
+            echo "The **Push** workflow then attaches these artifacts to the GitHub release without rebuilding."
+          } >> $GITHUB_STEP_SUMMARY
