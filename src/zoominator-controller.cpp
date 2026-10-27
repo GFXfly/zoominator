@@ -2922,7 +2922,8 @@ void ZoominatorController::applyZoomWithinItemBounds(double z, float fx, float f
 		if (markerHasPoint && !markerPlaced) {
 			double mu = 0.0, mv = 0.0;
 			toSource(markerSceneX, markerSceneY, mu, mv);
-			if (mu >= origCrop.l && mu <= origCrop.l + visW && mv >= origCrop.t && mv <= origCrop.t + visH) {
+			if (mu >= origCrop.l && mu <= origCrop.l + visW && mv >= origCrop.t &&
+			    mv <= origCrop.t + visH) {
 				const double lx = (mu - crop.l) * effSx * ratioX;
 				const double ly = (mv - crop.t) * effSy * ratioY;
 				markerX = state.orig.effectivePos.x + lx * cs - ly * sn;
