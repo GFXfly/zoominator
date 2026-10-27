@@ -1743,8 +1743,7 @@ static bool window_bounds_for_id(int64_t windowId, CGRect &rcOut)
 {
 	if (windowId == 0)
 		return false;
-	CFArrayRef windowList =
-		CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, (CGWindowID)windowId);
+	CFArrayRef windowList = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, (CGWindowID)windowId);
 	if (!windowList)
 		return false;
 
